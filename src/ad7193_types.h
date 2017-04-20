@@ -6,6 +6,7 @@
 typedef enum {
     AD7193_REG_COM = 0,     // Communcation Register (WO, 8-bit)
     AD7193_REG_STATUS = 0,  // Status Register (RO, 8-bit)
+    AD7193_REG_CONFIG = 2,  // Configuration Register (RW, 24-bit)
     AD7193_REG_DATA = 3,    // Data Register (RO, 24-bit)
     AD7193_REG_ID = 4,      // ID Register (RO, 8-bit)
 } ad7193_reg_t;
@@ -27,11 +28,6 @@ typedef enum {
 #define AD7193_COM_CREAD    1 << 2          // Enable continuous read
 
 typedef enum {
-    AD7193_UNIPOLAR = 1,
-    AD7193_POLAR = 0
-} ad7193_pol_t;
-
-typedef enum {
     AD7193_CHAN0 = 1,
     AD7193_CHAN1 = 1 << 1,
     AD7193_CHAN2 = 1 << 2,
@@ -49,9 +45,16 @@ typedef struct {
     bool cread;
     int cs_pin;
 
-    ad7193_pol_t polarity;
-    uint8_t gain;
-    ad7193_chan_t channels;
+    // Configuration Register
+    bool cr_chop;
+    bool cr_refsel;
+    bool cr_pseudo;
+    ad7193_chan_t cr_channels;
+    bool cr_burn;
+    bool cr_refdet;
+    bool cr_buf;
+    bool cr_unipolar;
+    uint8_t cr_gain;
 } ad7193_config_t;
 
 #endif // __AD7193_TYPES_H__
