@@ -30,6 +30,15 @@ private:
      */
     void readIncomingData(ad7193_regsize_t size, uint8_t* buf);
 
+public:
+    /**
+     * Init the AD7193 and the SPI hardware
+     * @param cs_pin Chip Select PIN
+     * @param speed  Clock speed (in Hz)
+     * @param cread  Continuous Read %TODO
+     */
+    void begin(int cs_pin, uint32_t speed = 4000000, bool cread = false);
+
     /**
      * Get the content of a register
      * @param reg     Targetted register
@@ -45,15 +54,6 @@ private:
      * @param buf  New register content (will be overwritten)
      */
     void setRegister(ad7193_reg_t reg, ad7193_regsize_t size, uint8_t* buf);
-
-public:
-    /**
-     * Init the AD7193 and the SPI hardware
-     * @param cs_pin Chip Select PIN
-     * @param speed  Clock speed (in Hz)
-     * @param cread  Continuous Read %TODO
-     */
-    void begin(int cs_pin, uint32_t speed = 4000000, bool cread = false);
 
     /**
      * Get converted data from the ADC
