@@ -1,6 +1,8 @@
 #ifndef __AD7193_TYPES_H__
 #define __AD7193_TYPES_H__
 
+#include <stdint.h>
+
 typedef enum {
     AD7193_REG_COM = 0,     // Communcation Register (WO, 8-bit)
     AD7193_REG_STATUS = 0,  // Status Register (RO, 8-bit)
@@ -44,6 +46,9 @@ typedef enum {
 
 typedef struct {
     SPISettings spi;
+    bool cread;
+    int cs_pin;
+
     ad7193_pol_t polarity;
     uint8_t gain;
     ad7193_chan_t channels;

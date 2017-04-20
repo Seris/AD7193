@@ -2,12 +2,11 @@
 #define __AD7193_H__
 
 #include <SPI.h>
+#include <stdint.h>
 #include "ad7193_types.h"
 
 class AD7193 {
 private:
-    int cs_pin;
-    bool cread;
     ad7193_config_t config;
 
     /**
@@ -29,7 +28,7 @@ private:
      * @param size Number of bytes
      * @param buf  buffer of size bytes
      */
-    void readIncomingData(ad7193_regsize_t size, char* buf);
+    void readIncomingData(ad7193_regsize_t size, uint8_t* buf);
 
     /**
      * Get the content of a register
@@ -45,7 +44,7 @@ private:
      * @param size Size of the register
      * @param buf  New register content (will be overwritten)
      */
-    void setRegister(ad7193_reg_t reg, ad7193_regsize_t size, char* buf);
+    void setRegister(ad7193_reg_t reg, ad7193_regsize_t size, uint8_t* buf);
 
 public:
     /**
