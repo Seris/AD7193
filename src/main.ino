@@ -4,7 +4,7 @@
 AD7193 module;
 void setup(){
     Serial.begin(9600);
-    module.begin(10);
+    module.begin(2);
     delay(1000);
 }
 
