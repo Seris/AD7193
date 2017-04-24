@@ -6,13 +6,12 @@
 /**
  * Init the AD7193 and the SPI hardware
  * @param cs_pin Chip Select PIN
- * @param speed  Clock speed (in Hz)
- * @param cread  Continuous Read Mode
+ * @param speed  Clock speed (in Hz)w
  */
-void AD7193::begin(int cs_pin, uint32_t speed, bool cread){
-    config = AD7193::defaultConfig();
+void AD7193::begin(int cs_pin, uint32_t speed){
+    config = defaultConfig();
     config.cs_pin = cs_pin;
-    config.cread = cread;
+    config.cread = false;
     config.spi = SPISettings(speed, MSBFIRST, SPI_MODE3);
 
     pinMode(cs_pin, OUTPUT);
@@ -20,7 +19,7 @@ void AD7193::begin(int cs_pin, uint32_t speed, bool cread){
     SPI.begin();
 
     reset();
-    setConfig(&config);
+    syncConfig();
 }
 
 /**
@@ -35,22 +34,147 @@ uint32_t AD7193::getID(){
 }
 
 /**
+ * Perform a interior full scale calibration (cf. AD7193 documentation) %TODO
+ * @return True if success
+ */
+bool AD7193::fullScaleCalibration(){
+    bool cal_success = false;
+    ad7193_mode_t mode = config.md_mode;
+
+    beginTransaction();
+    config.md_mode = AD7193_MOD_INTFULLCAL;
+    setRegister(AD7193_REG_MODE,
+                AD7193_REGSIZE_MODE,
+                generateModeRegister(&config));
+    if(waitRDYLow()) cal_success = true;
+    endTransaction();
+
+    config.md_mode = mode;
+    setConfig(&config);
+
+    return cal_success;
+}
+
+/**
+ * Calibrate a channel
+ * @param  channel The channel that will be calibrate
+ * @return         True if calibration was successfull
+ */
+bool AD7193::calibrateChannel(ad7193_chan_t channel){
+    bool cal_success = false;
+    int channels = config.cr_channels;
+    ad7193_mode_t mode = config.md_mode;
+
+    setChannelInConfig(&config, channel);
+    setConfig(&config);
+
+    beginTransaction();
+    config.md_mode = AD7193_MOD_INTZEROCAL;
+    setRegister(AD7193_REG_MODE,
+                AD7193_REGSIZE_MODE,
+                generateModeRegister(&config));
+    if(waitRDYLow()) cal_success = true;
+    endTransaction();
+
+    config.md_mode = mode;
+    config.cr_channels = channels;
+    setConfig(&config);
+
+    return cal_success;
+}
+
+/**
+ * Wait for data to come on the SPI bus
+ * @param  break_time Timeout
+ * @return            true if data is available, false otherwise
+ */
+bool AD7193::waitForData(uint32_t break_time){
+    bool status;
+    beginTransaction();
+    status = waitRDYLow(break_time);
+    endTransaction();
+    return status;
+}
+
+/**
+ * Wait for the RDY pin to go low
+ * @param  break_time Timeout
+ * @return           True if data is available, false otherwise
+ */
+bool AD7193::waitRDYLow(uint32_t break_time){
+    bool is_low = false;
+    uint32_t start = millis();
+
+    while((millis() - start < break_time) && is_low == false){
+        is_low = (digitalRead(AD7193_PIN_MISO) == LOW);
+    }
+
+    return is_low;
+}
+
+/**
  * Get converted data from the ADC
  * %TODO continuous reading is currently not supported
  */
-uint32_t AD7193::getData(uint8_t* from_channel){
+uint32_t AD7193::getData(ad7193_chan_t* from_channel){
     uint32_t data;
     uint32_t status;
 
-    beginTransaction();
-    if(from_channel != NULL){
-        status = getRegister(AD7193_REG_STATUS, AD7193_REGSIZE_STATUS);
-        *from_channel = status & 0xf;
+    if(waitForData()){
+        beginTransaction();
+
+        if(!config.md_dat_sta && from_channel != NULL){
+            status = getRegister(AD7193_REG_STATUS, AD7193_REGSIZE_STATUS);
+        }
+
+        if(!config.cread){
+            writeComRegister(AD7193_COM_READ, AD7193_REG_DATA);
+        }
+
+        data = readIncomingRegister(AD7193_REGSIZE_DATA);
+        if(config.md_dat_sta){
+            status = readIncomingRegister(AD7193_REGSIZE_STATUS);
+        }
+
+        if(from_channel != NULL){
+            *from_channel = (ad7193_chan_t) (status & 0xf);
+        }
+
+        endTransaction();
+    } else {
+        data = AD7193_NODATA;
     }
-    data = getRegister(AD7193_REG_DATA, AD7193_REGSIZE_DATA);
-    endTransaction();
+
 
     return data;
+}
+
+/**
+ * Get converted data from the ADC in mV
+ */
+double AD7193::getDataAsMilliVolts(ad7193_chan_t* from_channel){
+    int32_t data;
+    double max_value = 0;
+    switch(config.cr_gain){
+
+        case 0: max_value = 2500.0; break;
+        case 3: max_value = 312.5; break;
+        case 4: max_value = 156.2; break;
+        case 5: max_value = 78.125; break;
+        case 6: max_value = 39.6; break;
+        case 7: max_value = 19.53; break;
+    }
+
+    data = (int32_t) getData(from_channel);
+    if(data != (int32_t) AD7193_NODATA){
+        if(!config.cr_unipolar){
+            return max_value * ((double) data * 2 / 0xffffff - 1);
+        } else {
+            return ((double) data) / 0xffffff * max_value;
+        }
+    } else {
+        return AD7193_NODATA;
+    }
 }
 
 /**
@@ -59,10 +183,12 @@ uint32_t AD7193::getData(uint8_t* from_channel){
 void AD7193::syncConfig(){
     uint32_t confreg;
     uint32_t modereg;
-    this->beginTransaction();
+
+    beginTransaction();
     confreg = getRegister(AD7193_REG_CONFIG, AD7193_REGSIZE_CONFIG);
     modereg = getRegister(AD7193_REG_MODE, AD7193_REGSIZE_MODE);
-    this->endTransaction();
+    endTransaction();
+
     updateConfigWithConfReg(&config, confreg);
     updateConfigWithModeReg(&config, modereg);
 }
@@ -77,14 +203,25 @@ ad7193_config_t AD7193::getConfig(){
 /**
  * Push config to the AD7193
  */
-void AD7193::setConfig(ad7193_config_t* config){
-    uint32_t confreg = AD7193::generateConfigRegister(config);
-    uint32_t modereg = AD7193::generateModeRegister(config);
-
+void AD7193::setConfig(ad7193_config_t* newconfig){
     beginTransaction();
-    setRegister(AD7193_REG_CONFIG, AD7193_REGSIZE_CONFIG, confreg);
-    //setRegister(AD7193_REG_MODE, AD7193_REGSIZE_MODE, modereg);
+    pushConfig(newconfig);
     endTransaction();
+}
+
+/**
+ * Push config to the AD7193
+ */
+void AD7193::pushConfig(ad7193_config_t* newconfig){
+    uint32_t confreg = generateConfigRegister(newconfig);
+    uint32_t modereg = generateModeRegister(newconfig);
+
+    //writeComRegister(AD7193_COM_READ, AD7193_REG_DATA);
+    //readIncomingRegister(AD7193_REGSIZE_DATA);
+    setRegister(AD7193_REG_CONFIG, AD7193_REGSIZE_CONFIG, confreg);
+    setRegister(AD7193_REG_MODE, AD7193_REGSIZE_MODE, modereg);
+
+    config = *newconfig;
 }
 
 /**
@@ -110,7 +247,6 @@ void AD7193::beginTransaction(){
  * End a SPI transaction
  */
 void AD7193::endTransaction(){
-    delay(1);
     digitalWrite(config.cs_pin, HIGH);
     SPI.endTransaction();
 }
@@ -125,7 +261,7 @@ void AD7193::writeComRegister(ad7193_comreg_op_t op_mode, ad7193_reg_t reg){
     data |= op_mode;
     data |= AD7193_COM_ADDR(reg);
     data |= config.cread ? AD7193_COM_CREAD : 0;
-    SPI.transfer(data);
+    writeRegister(AD7193_REGSIZE_COM, (uint32_t) data);
 }
 
 /**
@@ -136,7 +272,18 @@ uint32_t AD7193::readIncomingRegister(ad7193_regsize_t size){
     uint8_t buffer[size];
     memset(buffer, 0, size);
     SPI.transfer(buffer, size);
-    return AD7193::bufferToRegister(size, buffer);
+    return bufferToRegister(size, buffer);
+}
+
+/**
+ * Write a register in the SPI bus
+ * @param size Size of the register
+ * @param dat  Data to send
+ */
+void AD7193::writeRegister(ad7193_regsize_t size, uint32_t dat){
+    for(int i = size - 1; i >= 0; i--){
+        SPI.transfer((dat >> (i * 8)) & 0xff);
+    }
 }
 
 /**
@@ -147,9 +294,7 @@ uint32_t AD7193::readIncomingRegister(ad7193_regsize_t size){
  */
 void AD7193::setRegister(ad7193_reg_t reg, ad7193_regsize_t size, uint32_t dat){
     writeComRegister(AD7193_COM_WRITE, reg);
-    for(int i = size - 1; i >= 0; i--){
-        SPI.transfer((dat >> (i * 8)) & 0xff);
-    }
+    writeRegister(size, dat);
 }
 
 /**
@@ -160,7 +305,7 @@ void AD7193::setRegister(ad7193_reg_t reg, ad7193_regsize_t size, uint32_t dat){
  */
 uint32_t AD7193::getRegister(ad7193_reg_t reg, ad7193_regsize_t size){
     writeComRegister(AD7193_COM_READ, reg);
-    return AD7193::readIncomingRegister(size);
+    return readIncomingRegister(size);
 }
 
 /**
@@ -173,7 +318,7 @@ ad7193_config_t AD7193::defaultConfig(){
     default_config.cr_chop = false;
     default_config.cr_refsel = false;
     default_config.cr_pseudo = false;
-    AD7193::addChannelToConfig(&default_config, AD7193_CHAN0);
+    setChannelInConfig(&default_config, AD7193_CHAN0);
     default_config.cr_burn = false;
     default_config.cr_refdet = false;
     default_config.cr_buf = true;
@@ -181,7 +326,7 @@ ad7193_config_t AD7193::defaultConfig(){
     default_config.cr_gain = 7;
 
     // Mode register
-    default_config.md_mode_sel = AD7193_MOD_CONTCONV;
+    default_config.md_mode = AD7193_MOD_CONTCONV;
     default_config.md_dat_sta = false;
     default_config.md_clk = AD7193_CLK_INT;
     default_config.md_averaging = 0;
@@ -202,7 +347,7 @@ void AD7193::updateConfigWithConfReg(ad7193_config_t* config, uint32_t reg){
     config->cr_chop = (reg >> 23) & 1;
     config->cr_refsel = (reg >> 20) & 1;
     config->cr_pseudo = (reg >> 18) & 1;
-    config->cr_channels = (ad7193_chan_t) ((reg >> 8) & 0x3ff);
+    config->cr_channels = (reg >> 8) & 0x3ff;
     config->cr_burn = (reg >> 7) & 1;
     config->cr_refdet = (reg >> 6) & 1;
     config->cr_buf = (reg >> 4) & 1;
@@ -214,15 +359,15 @@ void AD7193::updateConfigWithConfReg(ad7193_config_t* config, uint32_t reg){
  * Update configuration with the given Mode Register value
  */
 void AD7193::updateConfigWithModeReg(ad7193_config_t* config, uint32_t reg){
-    config->md_mode_sel = (reg << 21) & 7;
-    config->md_dat_sta = (reg << 20) & 1;
-    config->md_clk = (reg << 18) & 3;
+    config->md_mode = (ad7193_mode_t) ((reg >> 21) & 7);
+    config->md_dat_sta = (reg >> 20) & 1;
+    config->md_clk = (ad7193_clk_t) ((reg >> 18) & 3);
     config->md_averaging = (reg << 16) & 3;
-    config->md_sinc3 = (reg << 15) & 1;
-    config->md_enpar = (reg << 13) & 1;
-    config->md_clk_div = (reg << 12) & 1;
-    config->md_single = (reg << 11) & 1;
-    config->md_rej60 = (reg << 10) & 1;
+    config->md_sinc3 = (reg >> 15) & 1;
+    config->md_enpar = (reg >> 13) & 1;
+    config->md_clk_div = (reg >> 12) & 1;
+    config->md_single = (reg >> 11) & 1;
+    config->md_rej60 = (reg >> 10) & 1;
     config->md_filter_output = (reg) & 0x3ff;
 }
 
@@ -251,7 +396,7 @@ uint32_t AD7193::generateConfigRegister(ad7193_config_t* config){
 uint32_t AD7193::generateModeRegister(ad7193_config_t* config){
     uint32_t reg = 0;
 
-    reg |= (uint32_t) config->md_mode_sel << 21;
+    reg |= (uint32_t) config->md_mode << 21;
     reg |= (uint32_t) config->md_dat_sta << 20;
     reg |= (uint32_t) config->md_clk << 18;
     reg |= (uint32_t) config->md_averaging << 16;
@@ -278,15 +423,23 @@ uint32_t AD7193::bufferToRegister(ad7193_regsize_t size, uint8_t* buffer){
 }
 
 /**
+ * Set a unique channel in config
+ */
+void AD7193::setChannelInConfig(ad7193_config_t* c, ad7193_chan_t chan){
+    c->cr_channels = 1 << chan;
+}
+
+
+/**
  * Add a channel to config
  */
 void AD7193::addChannelToConfig(ad7193_config_t* c, ad7193_chan_t chan){
-    c->cr_channels |= (ad7193_chan_t) (1 << chan);
+    c->cr_channels |= 1 << chan;
 }
 
 /**
  * Remove a channel from config
  */
 void AD7193::removeChannelFromConfig(ad7193_config_t *c, ad7193_chan_t chan){
-    c->cr_channels &= (ad7193_chan_t) ~(1 << chan);
+    c->cr_channels &= ~(1 << chan);
 }

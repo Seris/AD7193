@@ -2,25 +2,34 @@
 #include <stdint.h>
 
 AD7193 module;
+ad7193_config_t config;
+
 void setup(){
     Serial.begin(9600);
     module.begin(2);
 
-    ad7193_config_t config = module.getConfig();
+    config = module.getConfig();
+    AD7193::setChannelInConfig(&config, AD7193_CHAN0);
     config.cr_gain = 0;
+    config.cr_chop = true;
     config.cr_unipolar = true;
-    AD7193::addChannelToConfig(&config, AD7193_CHAN2);
+    config.cr_pseudo = true;
     module.setConfig(&config);
 
-    delay(500);
+    if(module.fullScaleCalibration() && module.calibrateChannel(AD7193_CHAN0)){
+        Serial.println("Calibration successfull !");
+    } else {
+        Serial.println("Calibration failure !");
+    }
 }
 
 void loop(){
-    uint8_t channel;
-    uint32_t data = module.getData(&channel);
-    Serial.print("Channel ");
-    Serial.println(channel, BIN);
-    Serial.println(data, HEX);
-
-    delay(1000);
+    ad7193_chan_t channel;
+    double data = module.getDataAsMilliVolts(NULL);
+    if(data != AD7193_NODATA){
+        Serial.println(data, HEX);
+    } else {
+        Serial.println("No data available");
+    }
+    delay(500);
 }
